@@ -1,0 +1,3 @@
+[submodule "DPC/ChamferDistancePytorch"]
+	path = DPC/ChamferDistancePytorch
+	url = https://github.com/ThibaultGROUEIX/ChamferDistancePytorch
