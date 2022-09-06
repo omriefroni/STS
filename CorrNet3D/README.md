@@ -13,7 +13,11 @@ The code has been tested with Python3.8, pytorch-lightning 1.1.6 and Cuda 10.2:
     conda activate corrnet3d
     pip install pytorch-lightning==1.1.6
     pip install --upgrade https://github.com/unlimblue/KNN_CUDA/releases/download/0.2/KNN_CUDA-0.2-py3-none-any.whl
-    pip install "git+git://github.com/erikwijmans/Pointnet2_PyTorch.git#egg=pointnet2_ops&subdirectory=pointnet2_ops_lib"
+    <!-- pip install "git+git://github.com/erikwijmans/Pointnet2_PyTorch.git#egg=pointnet2_ops&subdirectory=pointnet2_ops_lib" -->
+    git clone https://github.com/erikwijmans/Pointnet2_PyTorch.git
+    cd Pointnet2_PyTorch/
+    pip install pointnet2_ops_lib/.
+    cd ../
     conda install torchvision torchaudio cudatoolkit=10.2 -c pytorch
     pip install h5py
     pip install tables

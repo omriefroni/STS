@@ -15,7 +15,11 @@ pip install addict
 pip install open3d-python
 pip install git+git://github.com/fwilliams/point-cloud-utils
 pip install --upgrade https://github.com/unlimblue/KNN_CUDA/releases/download/0.2/KNN_CUDA-0.2-py3-none-any.whl
-pip install "git+git://github.com/erikwijmans/Pointnet2_PyTorch.git#egg=pointnet2_ops&subdirectory=pointnet2_ops_lib"
+# pip install "git+git://github.com/erikwijmans/Pointnet2_PyTorch.git#egg=pointnet2_ops&subdirectory=pointnet2_ops_lib"
+git clone https://github.com/erikwijmans/Pointnet2_PyTorch.git
+cd Pointnet2_PyTorch/
+pip install pointnet2_ops_lib/.
+cd ../
 conda install torchaudio -c pytorch --yes
 
 
