@@ -491,7 +491,9 @@ def cli_main(args=None):
         trainer.fit(model, train_dataloader=train_dataloader, val_dataloaders=val_dataloader)
 
     # trainer.test(model) # STS - nor supported yet, test manually
-    return dm, model, trainer
+    # return dm, model, trainer
+    return  model, trainer
+
 
 def cli_main_test_(args=None):
     from lit_dataset_clean import testset_pytable_with_soft_label
