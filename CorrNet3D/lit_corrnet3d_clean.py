@@ -6,13 +6,18 @@ from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from torch.utils.data import random_split
 from torchvision import transforms
-import os
+import os, sys
 from knn_cuda import KNN 
 import pointnet2_ops._ext as _ext
 import numpy as np
 import pickle
 from tqdm import tqdm
-
+# STS imports
+print(os.path.abspath('./'))
+sys.path.append(os.path.abspath('./'))
+from Spectral_Teacher.FM_utils  import fm_step
+from STS_utils.args import str2bool
+from Spectral_data.pc_dataset import create_sts_test_dataset, create_sts_train_val_dataset
 #Omri
 
 class Encoder(pl.LightningModule): 
@@ -154,7 +159,7 @@ class LitCorrNet3D(pl.LightningModule):
         enc_emb_dim: int = 128,
         enc_glb_dim: int = 1024,
         ls_coeff: list = [10.0, 1.0, 0.1],
-        fm_coeff: float = 0.0,
+        fm_coeff: float = 0.0, # STS - spectral loss coeff
         dec_in_dim: int = 1024+3,
         lr: float = 1e-4,
         **kwargs
@@ -170,7 +175,7 @@ class LitCorrNet3D(pl.LightningModule):
         self.rec_coeff = ls_coeff[0]
         self.rank_coeff = ls_coeff[1]
         self.mfd_coeff = ls_coeff[2]
-        self.fm_coeff = fm_coeff,
+        self.fm_coeff = fm_coeff # STS - spectral loss coeff
         self.k_nn = k_nn
         
         self.encoder  = Encoder(self.enc_emb_dim, self.enc_glb_dim, self.k_nn)
@@ -220,7 +225,7 @@ class LitCorrNet3D(pl.LightningModule):
         return mean
 
     def _prob_to_corr_test(self, prob_matrix):
-        c = torch.zeros_like(input=prob_matrix)
+        c = torch.zeros_like(hpatamst=prob_matrix)
         idx = torch.argmax(input=prob_matrix, dim=2, keepdim=True)
         for bsize in range(c.shape[0]):
             for each_row in range(c.shape[1]):
@@ -283,8 +288,10 @@ class LitCorrNet3D(pl.LightningModule):
         yb = torch.cat((rand_grid_b, yb), 1)     
         out_b = 2*self.decoder(yb)
 
-        return p, out_a, out_b
-
+        return p, similarity, out_a, out_b, HIER_feat1, HIER_feat2 # STS - additional features outputs for spectral teacher
+        # return p, out_a, out_b, HIER_feat1, HIER_feat2 # STS - the same with origianl p (works better with similarity)
+        # return p, similarity, out_a, out_b # Original code
+          
     def _batch_frobenius_norm(self, matrix1, matrix2):
         loss_F = torch.norm((matrix1-matrix2),dim=(1,2))
         return loss_F
@@ -343,29 +350,39 @@ class LitCorrNet3D(pl.LightningModule):
         return rec_term, rank_term, mfd_term
         
     def step(self, batch, batch_idx):
-        label, pinput1, input2, index_ = batch
-        
-        p, out_a, out_b =self._run_step(pinput1,input2)
-        rec_term, rank_term, mfd_term = self._run_loss(pinput1.transpose(2, 1), input2.transpose(2, 1), p, out_a, out_b)
 
-        loss = self.rec_coeff*rec_term + self.rank_coeff*rank_term + self.mfd_coeff*mfd_term
+        ## STS - converts STS_batch to CorrNet3D original pipeline
+        pinput1 = batch['verts'][:, :, :, 0].float()
+        input2 = batch['verts'][:, :, :, 1].float()
+
+
+            # label, pinput1, input2, index_ = batch #- originla code
+            # p, out_a, out_b =self._run_step(pinput1,input2) # Original code
+        p, similarity, out_a, out_b, feat1, feat2 =self._run_step(pinput1,input2) # STS - add feat1, feat2, outputs.
+        surfmnet_loss = fm_step(batch, feat1.transpose(1, 2), feat2.transpose(1, 2))
+
+        rec_term, rank_term, mfd_term = self._run_loss(pinput1.transpose(2, 1), input2.transpose(2, 1), p, out_a, out_b)
+            #loss = self.rec_coeff*rec_term + self.rank_coeff*rank_term + self.mfd_coeff*mfd_term # original code
+
+        loss = self.rec_coeff*rec_term + self.rank_coeff*rank_term + self.mfd_coeff*mfd_term   + self.fm_coeff * surfmnet_loss
         logs = {
             "rec_loss(x{})".format(str(self.rec_coeff)): rec_term,
             "rank_loss(x{})".format(str(self.rank_coeff)): rank_term,
-            "mfd_loss(x{})".format(str(self.mfd_coeff)): mfd_term
+            "mfd_loss(x{})".format(str(self.mfd_coeff)): mfd_term,
+            "fm_loss(x{})".format(str(self.fm_coeff)): surfmnet_loss
         }
         self.train_loss_last_step.append(loss.item()) #if use loss, then gpu leak in the 1st epoch for pytorch-lightning 
-        return loss, logs
+        return loss, logs, similarity
 
     def training_step(self, batch, batch_idx):
-        loss, logs = self.step(batch, batch_idx)
+        loss, logs, _ = self.step(batch, batch_idx)
         self.log_dict({f"train_{k}": v for k, v in logs.items()}, on_step=False, on_epoch=True)
         self.log(name = 'train_loss',value=loss.item(), on_step=False, on_epoch=True)
         return loss
 
     def validation_step(self, val_batch, batch_idx):
         
-        loss, logs = self.step(val_batch, batch_idx)
+        loss, logs, sim = self.step(val_batch, batch_idx)
         self.log_dict({f"val_{k}": v for k, v in logs.items()})
         self.log(name = 'val_loss',value=loss.item(), on_step=True, on_epoch=True)
         return loss
@@ -381,22 +398,27 @@ class LitCorrNet3D(pl.LightningModule):
         for each_ratio in ratio_list:
             key_name = 'sl_'+str(each_ratio).replace('.', '')
             s_label.append(data_dict[key_name])
-        p, out_a, out_b =self._run_step(pinput1,input2)
+        p, sim, out_a, out_b, feat1, feat2 =self._run_step(pinput1,input2)
 
-        np.savetxt(os.path.join(self.logger.log_dir,'pinput1.xyz'),pinput1[0].cpu())
-        np.savetxt(os.path.join(self.logger.log_dir,'input2.xyz'),input2[0].cpu())
-        np.savetxt(os.path.join(self.logger.log_dir,'out_a.xyz'),out_a[0].transpose(1,0).cpu())
-        np.savetxt(os.path.join(self.logger.log_dir,'out_b.xyz'),out_b[0].transpose(1,0).cpu())
+        # original code - remove saving
+        # np.savetxt(os.path.join(self.logger.log_dir,'pinput1.xyz'),pinput1[0].cpu())
+        # np.savetxt(os.path.join(self.logger.log_dir,'input2.xyz'),input2[0].cpu())
+        # np.savetxt(os.path.join(self.logger.log_dir,'out_a.xyz'),out_a[0].transpose(1,0).cpu())
+        # np.savetxt(os.path.join(self.logger.log_dir,'out_b.xyz'),out_b[0].transpose(1,0).cpu())
 
-        corr_tensor = self._prob_to_corr_test(p) 
- 
-        acc_000 = self._label_ACC_percentage_for_inference(corr_tensor , label)
-        logs = {
-            "acc_0.00": acc_000
-        }
-        for k_ in range(len(ratio_list)):
-            logs["acc_"+str(ratio_list[k_])] = self._label_ACC_percentage_for_inference(corr_tensor , s_label[k_])
-        self.log_dict({f"test_{k}": v for k, v in logs.items()}, on_step=False, on_epoch=True)
+
+        if self.corrnet_test_dataset: # original code metric
+
+            corr_tensor = self._prob_to_corr_test(p) 
+    
+            acc_000 = self._label_ACC_percentage_for_inference(corr_tensor , label)
+            logs = {
+                "acc_0.00": acc_000
+            }
+            for k_ in range(len(ratio_list)):
+                logs["acc_"+str(ratio_list[k_])] = self._label_ACC_percentage_for_inference(corr_tensor , s_label[k_])
+            self.log_dict({f"test_{k}": v for k, v in logs.items()}, on_step=False, on_epoch=True)
+        # else: TBA
         return
 
     def configure_optimizers(self):
@@ -421,9 +443,18 @@ class LitCorrNet3D(pl.LightningModule):
         parser.add_argument('--ls_coeff', type=float, nargs='+', default=[10.0, 1.0, 0.1])
         parser.add_argument('--k_nn', type=int, default=20)
         parser.add_argument("--dec_in_dim", type=int, default=1024+3)
-        parser.add_argument("--num_workers", type=int, default=8)
+        parser.add_argument("--num_workers", type=int, default=4)
         parser.add_argument("--data_dir", type=str, default=None)
         parser.add_argument("--test_data_dir", type=str, default=None)
+        # STS args:
+        parser.add_argument("--k_lbo", type=int, default=40) # STS - HOw many LBO vectors for FM 
+        parser.add_argument('--fm_coeff', type=float,  default=1e-4) # STS - spectral loss coeff
+        parser.add_argument("--STS_dataset", type=str, default='SHREC') # STS - spectral datasetdataset 
+        parser.add_argument("--STS_test_dataset", type=str, default='SHREC') # STS - spectral datasetdataset 
+        parser.add_argument("--corrnet_test_dataset", type=str2bool, default=False,help="use original ")
+
+        parser.add_argument("--corrnet_train_dataset", type=str2bool, default=False,help="use original ")
+
         return parser
 
 def cli_main(args=None):
@@ -432,6 +463,8 @@ def cli_main(args=None):
     pl.seed_everything()
     parser = ArgumentParser()
     parser.add_argument("--dataset", default="human", type=str, choices=["human", "stl10", "imagenet"])
+    parser.add_argument("--sts_dataset", default="SHREC", type=str, choices=["SHREC", "FAUST", "SURREAL"]) # STS
+
     parser.add_argument("--batch_size", type=int, default=20)
     script_args, _ = parser.parse_known_args(args)
     if script_args.dataset == "human":
@@ -439,13 +472,25 @@ def cli_main(args=None):
     parser = LitCorrNet3D.add_model_specific_args(parser)
     parser = pl.Trainer.add_argparse_args(parser)
     args = parser.parse_args(args)
-    dm = dm_human.from_argparse_args(args) 
+    # STS - choose dataset
+    if args.corrnet_train_dataset:
+        dm = dm_human.from_argparse_args(args)
+    else:
+        train_dataloader, val_dataloader = create_sts_train_val_dataset(args)
+
+    
     args.input_pts = 1024
+    args.n_points = args.input_pts  # for STS dataloader
     model = LitCorrNet3D(**vars(args))
+    args.gpus = 0
     trainer = pl.Trainer.from_argparse_args(args, gpus=str(args.gpus), benchmark=True, deterministic=True) #gpu
     model.hparams.lr = 0.02089296130854041
-    trainer.fit(model, dm)
-    trainer.test(model)
+    if args.corrnet_train_dataset:
+        trainer.fit(model, dm)
+    else:
+        trainer.fit(model, train_dataloader=train_dataloader, val_dataloaders=val_dataloader)
+
+    # trainer.test(model) # STS - nor supported yet, test manually
     return dm, model, trainer
 
 def cli_main_test_(args=None):
@@ -458,21 +503,31 @@ def cli_main_test_(args=None):
     parser = pl.Trainer.add_argparse_args(parser)
     args = parser.parse_args(args) 
     args.input_pts = 1024
-    test_dataset_3dcoded = testset_pytable_with_soft_label(
-        test_h5file_name=args.test_data_dir, 
-        outname='nonrigid_surreal',
-        show=False)
-    print('len of test: ',len(test_dataset_3dcoded))
-    print('bsize: ',args.batch_size)
-    testloader = torch.utils.data.DataLoader(test_dataset_3dcoded, batch_size=args.batch_size,
-                                            shuffle=False, num_workers=args.num_workers)
+    # original code:
+    if args.corrnet_dataset:
+        test_dataset_3dcoded = testset_pytable_with_soft_label(
+            test_h5file_name=args.test_data_dir, 
+            outname='nonrigid_surreal',
+            show=False)
+        print('len of test: ',len(test_dataset_3dcoded))
+        print('bsize: ',args.batch_size)
+        testloader = torch.utils.data.DataLoader(test_dataset_3dcoded, batch_size=args.batch_size,
+                                                shuffle=False, num_workers=args.num_workers)
+    else:
+        test_dataset = create_sts_test_dataset(args)
+        testloader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size,
+                                                 shuffle=False, num_workers=args.num_workers)
+
+
     model = LitCorrNet3D(**vars(args))
     hparafiledir = args.ckpt_user.split('/')[0] + '/' + args.ckpt_user.split('/')[1] + '/' + 'hparams.yaml'
+    hparafiledir = '/home/eomri/dfaust_project/ckpt_for_nips/SURREAL/CORRNET3D/'+ 'hparams.yaml'
     print(hparafiledir)
     model_test = model.load_from_checkpoint(
         args.ckpt_user,
     hparams_file=hparafiledir)
     trainer = pl.Trainer.from_argparse_args(args, gpus=str(args.gpus), benchmark=True) 
+    model.corrnet_test_dataset = args.corrnet_test_dataset # STS
     trainer.test(model = model_test, test_dataloaders = testloader)
 
     return
