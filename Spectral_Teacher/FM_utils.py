@@ -8,13 +8,13 @@ def fm_step(batch, feat1, feat2):
     """
     Functional Map step - calculate 2 mapping matrices C at the spectral space, and SURFMNet loss.  
 
-    Inpute: 
+    Inputs: 
     - batch dictionary contains: 
         B- batch, N - number of points, K - number of LBO vectors, last dim: 0 - source, 1 - target
         LBO data:
         * 'evects' - LBO eigenvectors - [B, N, K, 2] 
         * 'evals' - LBO eigenvalues - [B, K, 2]
-        * 'a' - faces areas for normalization [B, N, 2] - OR: 'evects_trans' - normerlized LBO eigenvectors. 
+        * 'a' - faces areas for normalization [B, N, 2] - OR: 'evects_trans' - normalized LBO eigenvectors. 
 
         Features (from the student): 
         D - features dimensions 

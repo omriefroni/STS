@@ -154,6 +154,7 @@ class LitCorrNet3D(pl.LightningModule):
         enc_emb_dim: int = 128,
         enc_glb_dim: int = 1024,
         ls_coeff: list = [10.0, 1.0, 0.1],
+        fm_coeff: float = 0.0,
         dec_in_dim: int = 1024+3,
         lr: float = 1e-4,
         **kwargs
@@ -169,6 +170,7 @@ class LitCorrNet3D(pl.LightningModule):
         self.rec_coeff = ls_coeff[0]
         self.rank_coeff = ls_coeff[1]
         self.mfd_coeff = ls_coeff[2]
+        self.fm_coeff = fm_coeff,
         self.k_nn = k_nn
         
         self.encoder  = Encoder(self.enc_emb_dim, self.enc_glb_dim, self.k_nn)
