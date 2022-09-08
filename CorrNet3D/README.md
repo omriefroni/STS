@@ -22,6 +22,10 @@ The code has been tested with Python3.8, pytorch-lightning 1.1.6 and Cuda 10.2:
     pip install h5py
     pip install tables
     pip install matplotlib
+    pip install pandas
+    pip install wandb
+    pip install plotly
+    pip install pygeodesic
 
 ## Usage
 
