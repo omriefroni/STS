@@ -225,7 +225,7 @@ class LitCorrNet3D(pl.LightningModule):
         return mean
 
     def _prob_to_corr_test(self, prob_matrix):
-        c = torch.zeros_like(hpatamst=prob_matrix)
+        c = torch.zeros_like(input=prob_matrix)
         idx = torch.argmax(input=prob_matrix, dim=2, keepdim=True)
         for bsize in range(c.shape[0]):
             for each_row in range(c.shape[1]):
@@ -290,7 +290,7 @@ class LitCorrNet3D(pl.LightningModule):
 
         return p, similarity, out_a, out_b, HIER_feat1, HIER_feat2 # STS - additional features outputs for spectral teacher
         # return p, out_a, out_b, HIER_feat1, HIER_feat2 # STS - the same with origianl p (works better with similarity)
-        # return p, similarity, out_a, out_b # Original code
+        # return p, out_a, out_b # Original code
           
     def _batch_frobenius_norm(self, matrix1, matrix2):
         loss_F = torch.norm((matrix1-matrix2),dim=(1,2))
@@ -351,7 +351,7 @@ class LitCorrNet3D(pl.LightningModule):
         
     def step(self, batch, batch_idx):
 
-        ## STS - converts STS_batch to CorrNet3D original pipeline
+        ## STS - converts STS_batch to CorrNet3D original pipeline # TODO - add support to original dataset
         pinput1 = batch['verts'][:, :, :, 0].float()
         input2 = batch['verts'][:, :, :, 1].float()
 
@@ -408,7 +408,6 @@ class LitCorrNet3D(pl.LightningModule):
 
 
         if self.corrnet_test_dataset: # original code metric
-
             corr_tensor = self._prob_to_corr_test(p) 
     
             acc_000 = self._label_ACC_percentage_for_inference(corr_tensor , label)
@@ -451,8 +450,7 @@ class LitCorrNet3D(pl.LightningModule):
         parser.add_argument('--fm_coeff', type=float,  default=1e-4) # STS - spectral loss coeff
         parser.add_argument("--STS_dataset", type=str, default='SHREC') # STS - spectral datasetdataset 
         parser.add_argument("--STS_test_dataset", type=str, default='SHREC') # STS - spectral datasetdataset 
-        parser.add_argument("--corrnet_test_dataset", type=str2bool, default=False,help="use original ")
-
+        parser.add_argument("--corrnet_test_dataset", type=str2bool, default=True,help="use original ")
         parser.add_argument("--corrnet_train_dataset", type=str2bool, default=False,help="use original ")
 
         return parser
@@ -506,7 +504,7 @@ def cli_main_test_(args=None):
     args = parser.parse_args(args) 
     args.input_pts = 1024
     # original code:
-    if args.corrnet_dataset:
+    if args.corrnet_test_dataset:
         test_dataset_3dcoded = testset_pytable_with_soft_label(
             test_h5file_name=args.test_data_dir, 
             outname='nonrigid_surreal',
@@ -522,14 +520,15 @@ def cli_main_test_(args=None):
 
 
     model = LitCorrNet3D(**vars(args))
-    hparafiledir = args.ckpt_user.split('/')[0] + '/' + args.ckpt_user.split('/')[1] + '/' + 'hparams.yaml'
-    hparafiledir = '/home/eomri/dfaust_project/ckpt_for_nips/SURREAL/CORRNET3D/'+ 'hparams.yaml'
-    print(hparafiledir)
+    # hparafiledir = args.ckpt_user.split('/')[0] + '/' + args.ckpt_user.split('/')[1] + '/' + 'hparams.yaml'
+    # hparafiledir = '/home/eomri/dfaust_project/ckpt_for_nips/SURREAL/CORRNET3D/'+ 'hparams.yaml'
+    # print(hparafiledir)
     model_test = model.load_from_checkpoint(
-        args.ckpt_user,
-    hparams_file=hparafiledir)
+        args.ckpt_user)
+    # hparams_file=hparafiledir)
     trainer = pl.Trainer.from_argparse_args(args, gpus=str(args.gpus), benchmark=True) 
-    model.corrnet_test_dataset = args.corrnet_test_dataset # STS
+    model_test.corrnet_test_dataset = args.corrnet_test_dataset # STS
+    
     trainer.test(model = model_test, test_dataloaders = testloader)
 
     return

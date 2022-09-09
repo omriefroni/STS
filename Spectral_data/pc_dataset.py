@@ -43,13 +43,8 @@ def create_sts_train_val_dataset(hparams):
 
     elif hparams.STS_dataset=='FAUST':
         train_dataset = FAUST(hparams,'train')
-        choices = np.random.choice(len(train_dataset),int(len(train_dataset)*0.9), replace=False)
-        mask = np.zeros(len(train_dataset)).astype(bool)
-        mask[choices] = True
-        val_dataset = train_dataset.copy()
-        val_dataset.dataset_type = 'val'
-        val_dataset.all_pairs = np.array(val_dataset.all_pairs)[~mask]
-        train_dataset.all_pairs =  np.array(train_dataset.all_pairs)[mask]
+        train_dataset, val_dataset = torch.utils.data.random_split(train_dataset, [int(len(train_dataset)*0.9), len(train_dataset) - int(len(train_dataset)*0.9)])
+
 
         # another opption:
         # val_dataset = FAUST(hparams,'train')
