@@ -7,6 +7,8 @@ from itertools import combinations, product
 from torch.utils.data import Subset
 import random
 
+from torchaudio import datasets
+
 
 
 # STS static variable
@@ -30,9 +32,9 @@ def create_sts_test_dataset(args):
         dataset = SHREC(args,'test')
     elif name =='FAUST':
         dataset = FAUST(args,'test')
-    return
+    return dataset
 
-def create_sts_train_val_dataset(hparams):
+def create_sts_train_val_dataset(hparams, return_dataset=False):
     val_dataloader = None
     if hparams.STS_dataset=='SHREC':
         val_dataset = SHREC(hparams,'test') 
@@ -43,14 +45,18 @@ def create_sts_train_val_dataset(hparams):
 
     elif hparams.STS_dataset=='FAUST':
         train_dataset = FAUST(hparams,'train')
+        #TODO - add param for split
         train_dataset, val_dataset = torch.utils.data.random_split(train_dataset, [int(len(train_dataset)*0.9), len(train_dataset) - int(len(train_dataset)*0.9)])
 
 
         # another opption:
         # val_dataset = FAUST(hparams,'train')
-    train_dataloader = DataLoader(train_dataset, batch_size=hparams.batch_size, shuffle=True, num_workers=hparams.num_workers)
-    val_dataloader = DataLoader(val_dataset, batch_size=hparams.batch_size, shuffle=False, num_workers=hparams.num_workers, drop_last=True)
 
+    if return_dataset:
+        return train_dataset, val_dataset
+    else:
+        train_dataloader = DataLoader(train_dataset, batch_size=hparams.batch_size, shuffle=True, num_workers=hparams.num_workers)
+        val_dataloader = DataLoader(val_dataset, batch_size=hparams.batch_size, shuffle=False, num_workers=hparams.num_workers, drop_last=True)
     return train_dataloader, val_dataloader
 
 
