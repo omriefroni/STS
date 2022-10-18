@@ -18,7 +18,9 @@ sys.path.append(os.path.abspath('./'))
 from Spectral_Teacher.FM_utils  import fm_step
 from STS_utils.args import str2bool
 from Spectral_data.pc_dataset import create_sts_test_dataset, create_sts_train_val_dataset
-#Omri
+
+#STS 
+from STS_utils.metric import  compute_geo_dist_batch
 
 class Encoder(pl.LightningModule): 
     def __init__(self, enc_emb_dim=128, enc_glb_dim=1024, k_nn=20):
@@ -288,8 +290,9 @@ class LitCorrNet3D(pl.LightningModule):
         yb = torch.cat((rand_grid_b, yb), 1)     
         out_b = 2*self.decoder(yb)
 
+        # TODO: add flag in args 
         return p, similarity, out_a, out_b, HIER_feat1, HIER_feat2 # STS - additional features outputs for spectral teacher
-        # return p, out_a, out_b, HIER_feat1, HIER_feat2 # STS - the same with origianl p (works better with similarity)
+        # return p, p, out_a, out_b, HIER_feat1, HIER_feat2 # STS - the same with origianl p (works better with similarity)
         # return p, out_a, out_b # Original code
           
     def _batch_frobenius_norm(self, matrix1, matrix2):
@@ -363,8 +366,10 @@ class LitCorrNet3D(pl.LightningModule):
 
         rec_term, rank_term, mfd_term = self._run_loss(pinput1.transpose(2, 1), input2.transpose(2, 1), p, out_a, out_b)
             #loss = self.rec_coeff*rec_term + self.rank_coeff*rank_term + self.mfd_coeff*mfd_term # original code
-
-        loss = self.rec_coeff*rec_term + self.rank_coeff*rank_term + self.mfd_coeff*mfd_term   + self.fm_coeff * surfmnet_loss
+        if self.fm_coeff > 0:
+            loss = self.rec_coeff*rec_term + self.rank_coeff*rank_term + self.mfd_coeff*mfd_term   + self.fm_coeff * surfmnet_loss
+        else: 
+            loss = self.rec_coeff*rec_term + self.rank_coeff*rank_term + self.mfd_coeff*mfd_term 
         logs = {
             "rec_loss(x{})".format(str(self.rec_coeff)): rec_term,
             "rank_loss(x{})".format(str(self.rank_coeff)): rank_term,
@@ -381,33 +386,75 @@ class LitCorrNet3D(pl.LightningModule):
         return loss
 
     def validation_step(self, val_batch, batch_idx):
-        
+        # STS Addition
+        geo_dist_t = val_batch['geo_dist'][:,:,:,1]
+
         loss, logs, sim = self.step(val_batch, batch_idx)
         self.log_dict({f"val_{k}": v for k, v in logs.items()})
         self.log(name = 'val_loss',value=loss.item(), on_step=True, on_epoch=True)
+
+        # STS geo dist: 
+        geo_mean_fm , geo_array_fm, geo_90_fm = compute_geo_dist_batch(sim, geo_dist_t, is_P_mapping=False, dont_mean=False, gt=None)
+        if self.geo_dist.device != geo_array_fm.device:
+            self.geo_dist= self.geo_dist.to(geo_array_fm.device)
+
+        # uncomment if you want to log manually
+
+        self.geo_dist += geo_array_fm[0]
+        self.geo_mean += geo_mean_fm
+        self.acc += geo_array_fm[0][0].cpu()
+        self.count +=1
+        self.mean_err_list.append(geo_mean_fm.cpu().item())
+        self.acc_list.append(geo_array_fm[0][5].cpu().item())
+        mapping = sim.argmax(-1)[0].cpu()
+        self.mapping_list.append(mapping[None,:])
+        
+        log_geo_dict = {'geo_mean':geo_mean_fm.cpu().item(), 'acc':geo_array_fm[0][0].cpu().item(), 'acc20': geo_array_fm[0][100].cpu().item() }        
+        self.log_dict({f"val_{k}": v for k, v in log_geo_dict.items()},on_step=False, on_epoch=True)
         return loss
 
+    # STS - for manual log
+    def on_validation_epoch_start(self):
+        self.on_test_epoch_start()
+   
+    # STS -  for manual log
+    def on_test_epoch_start(self):
+        self.geo_range = torch.arange(0, 1, step=0.002)
+        self.geo_dist = torch.zeros(len(self.geo_range))
+        self.count = 0
+        self.geo_mean = 0
+        self.acc = 0
+
+
+        self.mean_err_list = []
+        self.pairs_name = []
+        self.acc_list = []
+        self.mapping_list = []
 
     def test_step(self, test_batch, batch_idx):
-        data_dict = test_batch
-        label=data_dict['label_flat']
-        pinput1=data_dict['src_flat']
-        input2=data_dict['tgt_flat']
-        s_label=[]
-        ratio_list = [0.02, 0.04, 0.06, 0.08, 0.10, 0.12, 0.14, 0.16, 0.18, 0.20]
-        for each_ratio in ratio_list:
-            key_name = 'sl_'+str(each_ratio).replace('.', '')
-            s_label.append(data_dict[key_name])
-        p, sim, out_a, out_b, feat1, feat2 =self._run_step(pinput1,input2)
 
-        # original code - remove saving
-        # np.savetxt(os.path.join(self.logger.log_dir,'pinput1.xyz'),pinput1[0].cpu())
-        # np.savetxt(os.path.join(self.logger.log_dir,'input2.xyz'),input2[0].cpu())
-        # np.savetxt(os.path.join(self.logger.log_dir,'out_a.xyz'),out_a[0].transpose(1,0).cpu())
-        # np.savetxt(os.path.join(self.logger.log_dir,'out_b.xyz'),out_b[0].transpose(1,0).cpu())
-
-
+        
+      
         if self.corrnet_test_dataset: # original code metric
+
+            data_dict = test_batch
+            label=data_dict['label_flat']
+            pinput1=data_dict['src_flat']
+            input2=data_dict['tgt_flat']
+            s_label=[]
+            ratio_list = [0.02, 0.04, 0.06, 0.08, 0.10, 0.12, 0.14, 0.16, 0.18, 0.20]
+            for each_ratio in ratio_list:
+                key_name = 'sl_'+str(each_ratio).replace('.', '')
+                s_label.append(data_dict[key_name])
+            p, sim, out_a, out_b, feat1, feat2 =self._run_step(pinput1,input2)
+
+            # original code - remove saving
+            # np.savetxt(os.path.join(self.logger.log_dir,'pinput1.xyz'),pinput1[0].cpu())
+            # np.savetxt(os.path.join(self.logger.log_dir,'input2.xyz'),input2[0].cpu())
+            # np.savetxt(os.path.join(self.logger.log_dir,'out_a.xyz'),out_a[0].transpose(1,0).cpu())
+            # np.savetxt(os.path.join(self.logger.log_dir,'out_b.xyz'),out_b[0].transpose(1,0).cpu())
+
+
             corr_tensor = self._prob_to_corr_test(p) 
     
             acc_000 = self._label_ACC_percentage_for_inference(corr_tensor , label)
@@ -417,8 +464,59 @@ class LitCorrNet3D(pl.LightningModule):
             for k_ in range(len(ratio_list)):
                 logs["acc_"+str(ratio_list[k_])] = self._label_ACC_percentage_for_inference(corr_tensor , s_label[k_])
             self.log_dict({f"test_{k}": v for k, v in logs.items()}, on_step=False, on_epoch=True)
-        # else: TBA
+        else:
+            pc1 = test_batch['verts'][:, :, :, 0].float()
+            pc2 = test_batch['verts'][:, :, :, 1].float()
+            geo_dixt_2 = test_batch['geo_dist'][:,:,:,1]
+            pair = test_batch['key'][0]
+
+
+            p, sim, out_a, out_b, feat1, feat2 =self._run_step(pc1,pc2)
+            geo_mean_fm , geo_array_fm, geo_90_fm = compute_geo_dist_batch(sim, geo_dixt_2, is_P_mapping=False, dont_mean=False, gt=None)
+            if self.geo_dist.device != geo_array_fm.device:
+                self.geo_dist= self.geo_dist.to(geo_array_fm.device)
+            log_geo_dict = {'geo_mean':geo_mean_fm.cpu().item(), 'acc':geo_array_fm[0][0].cpu().item(), 'acc20': geo_array_fm[0][100].cpu().item() }        
+            self.log_dict({f"val_{k}": v for k, v in log_geo_dict.items()},on_step=False, on_epoch=True)
+
+            # uncomment if you want to log manually
+            self.geo_dist += geo_array_fm[0]
+            self.geo_mean += geo_mean_fm
+            self.acc += geo_array_fm[0][0].cpu()
+            self.count +=1
+            self.mean_err_list.append(geo_mean_fm.cpu().item())
+            self.pairs_name.append(pair)
+            self.acc_list.append(geo_array_fm[0][5].cpu().item())
+            mapping = p.argmax(-1)[0].cpu()
+            self.mapping_list.append(mapping[None,:])
+
+
         return
+
+     
+    def on_validation_epoch_end(self):
+        # pass
+        self.on_test_epoch_end()
+
+    def on_test_epoch_end(self):
+        # uncomment if you want to log manually
+
+        self.geo_mean = self.geo_mean / self.count
+        self.acc = self.acc / self.count
+
+        # df = pd.DataFrame({'acc':self.geo_dist.cpu(),'range':self.geo_range})
+        # fig = px.line(df, x="range", y="acc")
+
+        dict_to_log = {#'geo_array': wandb.Plotly(fig),
+                        # 'test/geo_dist/Test_mean': self.geo_mean.cpu(),
+                        'geo_mean': self.geo_mean.cpu(),
+                        'acc': self.acc.cpu(),
+                      }
+        self.log_dict(dict_to_log)
+        print(dict_to_log)
+        dict_to_log['geo_array'] =self.geo_dist.cpu()
+
+
+        return 
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr)
@@ -450,7 +548,7 @@ class LitCorrNet3D(pl.LightningModule):
         parser.add_argument('--fm_coeff', type=float,  default=1e-4) # STS - spectral loss coeff
         parser.add_argument("--STS_dataset", type=str, default='SHREC') # STS - spectral datasetdataset 
         parser.add_argument("--STS_test_dataset", type=str, default='SHREC') # STS - spectral datasetdataset 
-        parser.add_argument("--corrnet_test_dataset", type=str2bool, default=True,help="use original ")
+        parser.add_argument("--corrnet_test_dataset", type=str2bool, default=False,help="use original ")
         parser.add_argument("--corrnet_train_dataset", type=str2bool, default=False,help="use original ")
 
         return parser
@@ -497,12 +595,17 @@ def cli_main_test_(args=None):
     from lit_dataset_clean import testset_pytable_with_soft_label
     pl.seed_everything()
     parser = ArgumentParser()
-    parser.add_argument("--ckpt_user", type=str)
-    parser.add_argument("--batch_size", type=int, default=20)
+    parser.add_argument("--ckpt_user", type=str, default ='ckpt/CorrNet3D/corrnet_b8_only_fm_shrec.ckpt')
+    parser.add_argument("--batch_size", type=int, default=1)
     parser = LitCorrNet3D.add_model_specific_args(parser)
     parser = pl.Trainer.add_argparse_args(parser)
     args = parser.parse_args(args) 
     args.input_pts = 1024
+    args.n_points =    args.input_pts
+
+    
+
+
     # original code:
     if args.corrnet_test_dataset:
         test_dataset_3dcoded = testset_pytable_with_soft_label(
@@ -526,6 +629,7 @@ def cli_main_test_(args=None):
     model_test = model.load_from_checkpoint(
         args.ckpt_user)
     # hparams_file=hparafiledir)
+    args.gpus = 0 
     trainer = pl.Trainer.from_argparse_args(args, gpus=str(args.gpus), benchmark=True) 
     model_test.corrnet_test_dataset = args.corrnet_test_dataset # STS
     
@@ -534,8 +638,8 @@ def cli_main_test_(args=None):
     return
 
 if __name__ == '__main__':
-    cli_main()       
-    # cli_main_test_()
+    # cli_main()       
+    cli_main_test_()
 
 
 
