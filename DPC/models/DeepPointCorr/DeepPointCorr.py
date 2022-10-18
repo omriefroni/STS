@@ -24,8 +24,10 @@ from models.sub_models.dgcnn.dgcnn import DGCNN as non_geo_DGCNN
 from utils.argparse_init import str2bool
 
 from ChamferDistancePytorch.chamfer3D import dist_chamfer_3D
- 
 
+# STS 
+from Spectral_Teacher.FM_utils import fm_step
+from STS_utils.metric import compute_geo_dist_batch
 
 class GroupingOperation(torch.autograd.Function):
     @staticmethod
@@ -184,66 +186,55 @@ class DeepPointCorr(ShapeCorrTemplate):
         data["source"], data["target"], data["P_normalized"], data["temperature"] = self.forward_source_target(data["source"], data["target"])
 
 
+        if self.hparams.mode != 'test':
+            # cross reconstruction losses
+            self.losses[f"source_cross_recon_loss"] = self.hparams.cross_recon_lambda * self.chamfer_loss(data["source"]["pos"], data["source"]["cross_recon"])
+            self.losses[f"target_cross_recon_loss"] =self.hparams.cross_recon_lambda * self.chamfer_loss(data["target"]["pos"], data["target"]["cross_recon"])
 
-        # cross reconstruction losses
-        self.losses[f"source_cross_recon_loss"] = self.hparams.cross_recon_lambda * self.chamfer_loss(data["source"]["pos"], data["source"]["cross_recon"])
-        self.losses[f"target_cross_recon_loss"] =self.hparams.cross_recon_lambda * self.chamfer_loss(data["target"]["pos"], data["target"]["cross_recon"])
+            # self reconstruction
+            if self.hparams.use_self_recon:
+                _, P_self_source = self.forward_shape(data["source"])
+                _, P_self_target = self.forward_shape(data["target"])
 
-        # self reconstruction
-        if self.hparams.use_self_recon:
-            _, P_self_source = self.forward_shape(data["source"])
-            _, P_self_target = self.forward_shape(data["target"])
+                # self reconstruction losses
+                data["source"]["self_recon_loss_unscaled"] = self.chamfer_loss(data["source"]["pos"], data["source"]["self_recon"])
+                data["target"]["self_recon_loss_unscaled"] = self.chamfer_loss(data["target"]["pos"], data["target"]["self_recon"])
 
-            # self reconstruction losses
-            data["source"]["self_recon_loss_unscaled"] = self.chamfer_loss(data["source"]["pos"], data["source"]["self_recon"])
-            data["target"]["self_recon_loss_unscaled"] = self.chamfer_loss(data["target"]["pos"], data["target"]["self_recon"])
+                self.losses[f"source_self_recon_loss"] = self.hparams.self_recon_lambda * data["source"]["self_recon_loss_unscaled"]
+                self.losses[f"target_self_recon_loss"] = self.hparams.self_recon_lambda * data["target"]["self_recon_loss_unscaled"]
 
-            self.losses[f"source_self_recon_loss"] = self.hparams.self_recon_lambda * data["source"]["self_recon_loss_unscaled"]
-            self.losses[f"target_self_recon_loss"] = self.hparams.self_recon_lambda * data["target"]["self_recon_loss_unscaled"]
+            if self.hparams.compute_perm_loss:
+                data[f"perm_loss_fwd_unscaled"] = self.get_perm_loss(data["P_normalized"])
+                data[f"perm_loss_bac_unscaled"] = self.get_perm_loss(data["P_normalized"].transpose(2, 1).contiguous())
 
-        if self.hparams.compute_perm_loss:
-            data[f"perm_loss_fwd_unscaled"] = self.get_perm_loss(data["P_normalized"])
-            data[f"perm_loss_bac_unscaled"] = self.get_perm_loss(data["P_normalized"].transpose(2, 1).contiguous())
-
-            if self.hparams.perm_loss_lambda > 0.0:
-                self.losses[f"perm_loss_fwd"] = self.hparams.perm_loss_lambda * data[f"perm_loss_fwd_unscaled"]
-                self.losses[f"perm_loss_bac"] = self.hparams.perm_loss_lambda * data[f"perm_loss_bac_unscaled"]
+                if self.hparams.perm_loss_lambda > 0.0:
+                    self.losses[f"perm_loss_fwd"] = self.hparams.perm_loss_lambda * data[f"perm_loss_fwd_unscaled"]
+                    self.losses[f"perm_loss_bac"] = self.hparams.perm_loss_lambda * data[f"perm_loss_bac_unscaled"]
 
 
 
-        if self.hparams.compute_neigh_loss and self.hparams.neigh_loss_lambda > 0.0:
-            data[f"neigh_loss_fwd_unscaled"] = \
-                self.get_neighbor_loss(data["source"]["pos"], data["source"]["neigh_idxs"], data["target"]["cross_recon"], self.hparams.k_for_cross_recon)
-            data[f"neigh_loss_bac_unscaled"] = \
-                self.get_neighbor_loss(data["target"]["pos"], data["target"]["neigh_idxs"], data["source"]["cross_recon"], self.hparams.k_for_cross_recon)
+            if self.hparams.compute_neigh_loss and self.hparams.neigh_loss_lambda > 0.0:
+                data[f"neigh_loss_fwd_unscaled"] = \
+                    self.get_neighbor_loss(data["source"]["pos"], data["source"]["neigh_idxs"], data["target"]["cross_recon"], self.hparams.k_for_cross_recon)
+                data[f"neigh_loss_bac_unscaled"] = \
+                    self.get_neighbor_loss(data["target"]["pos"], data["target"]["neigh_idxs"], data["source"]["cross_recon"], self.hparams.k_for_cross_recon)
 
-            self.losses[f"neigh_loss_fwd"] = self.hparams.neigh_loss_lambda * data[f"neigh_loss_fwd_unscaled"]
-            self.losses[f"neigh_loss_bac"] = self.hparams.neigh_loss_lambda * data[f"neigh_loss_bac_unscaled"]
+                self.losses[f"neigh_loss_fwd"] = self.hparams.neigh_loss_lambda * data[f"neigh_loss_fwd_unscaled"]
+                self.losses[f"neigh_loss_bac"] = self.hpa0rams.neigh_loss_lambda * data[f"neigh_loss_bac_unscaled"]
 
+            #STS
+            if  self.hparams.compute_fm_loss and self.hparams.fm_loss_lambda > 0.0:
+                data['fm_loss_unscaled'], data['P_fm']= self.fm_step(data)
+                self.losses[f"fm_loss"] = self.hparams.fm_loss_lambda * data[f"fm_loss_unscaled"]
         self.track_metrics(data)
 
         return data
 
-    def test_step(self, test_batch, batch_idx):
-        self.batch=test_batch
+    def test_step(self, test_batch, batch_idx): # STS - different rom original
         self.hparams.mode = 'test'
-        self.hparams.batch_idx=batch_idx
-        
-        label, pinput1, input2, ratio_list, soft_labels = self.extract_labels_for_test(test_batch)
+        test_batch = self.covnert_batch_from_omri(test_batch)
+        self.training_step(test_batch, batch_idx, mode='test')
 
-        source = {"pos": pinput1, "id": self.batch['source']["id"]}
-        target = {"pos": input2, "id": self.batch['target']["id"]}
-        batch = {"source": source, "target": target}
-        batch = self(batch)
-        p = batch["P_normalized"].clone()
-
-
-
-        _ = self.compute_acc(label, ratio_list, soft_labels, p,input2,track_dict=self.tracks,hparams=self.hparams)
-
-        self.log_test_step()
-        if self.vis_iter():
-            self.visualize(batch, mode='test')
 
         return True
 
@@ -276,9 +267,14 @@ class DeepPointCorr(ShapeCorrTemplate):
         parser.add_argument("--use_all_neighs_for_cross_reco", nargs="?", default=False, type=str2bool, const=True, help="whether to use self reconstruction")
         parser.add_argument("--use_all_neighs_for_self_reco", nargs="?", default=False, type=str2bool, const=True, help="whether to use self reconstruction")
 
+        parser.add_argument("--compute_fm_loss", nargs="?", default=False, type=str2bool, help="whether to compute neighbor smoothness loss")
+        parser.add_argument("--fm_loss_lambda", type=float, default=1, help="weight for neighbor smoothness loss")
+        parser.add_argument("--n_points", type=int, default=1024, help="number of data points")
+        parser.add_argument("--k_lbo", type=int, default=40, help="How many LBO vectors to create")
+
         parser.set_defaults(
             optimizer="adam",
-            lr=0.0003,
+            lr=0.0003,  # lr = 0.001 (beter in some cases)
             weight_decay=5e-4,
             max_epochs=300,
             accumulate_grad_batches=2,
@@ -295,28 +291,58 @@ class DeepPointCorr(ShapeCorrTemplate):
 
 
 
-
     def track_metrics(self, data):
-        self.tracks[f"source_cross_recon_error"] = self.chamfer_loss(data["source"]["pos"], data["source"]["cross_recon_hard"])
-        self.tracks[f"target_cross_recon_error"] = self.chamfer_loss(data["target"]["pos"], data["target"]["cross_recon_hard"])
+        if self.hparams.mode !='test':
+            self.tracks[f"source_cross_recon_error"] = self.chamfer_loss(data["source"]["pos"], data["source"]["cross_recon_hard"])
+            self.tracks[f"target_cross_recon_error"] = self.chamfer_loss(data["target"]["pos"], data["target"]["cross_recon_hard"])
 
 
-        if self.hparams.use_self_recon:
-            self.tracks[f"source_self_recon_loss_unscaled"] = data["source"]["self_recon_loss_unscaled"]
-            self.tracks[f"target_self_recon_loss_unscaled"] = data["target"]["self_recon_loss_unscaled"]
+            if self.hparams.use_self_recon:
+                self.tracks[f"source_self_recon_loss_unscaled"] = data["source"]["self_recon_loss_unscaled"]
+                self.tracks[f"target_self_recon_loss_unscaled"] = data["target"]["self_recon_loss_unscaled"]
 
 
-        if self.hparams.compute_neigh_loss and self.hparams.neigh_loss_lambda > 0.0:
-            self.tracks[f"neigh_loss_fwd_unscaled"] = data[f"neigh_loss_fwd_unscaled"]
-            self.tracks[f"neigh_loss_bac_unscaled"] = data[f"neigh_loss_bac_unscaled"]
+            if self.hparams.compute_neigh_loss and self.hparams.neigh_loss_lambda > 0.0:
+                self.tracks[f"neigh_loss_fwd_unscaled"] = data[f"neigh_loss_fwd_unscaled"]
+                self.tracks[f"neigh_loss_bac_unscaled"] = data[f"neigh_loss_bac_unscaled"]
 
-        # nearest neighbors hit accuracy
-        source_pred = data["P_normalized"].argmax(dim=2)
-        target_neigh_idxs = data["target"]["neigh_idxs"]
+            # nearest neighbors hit accuracy
+            source_pred = data["P_normalized"].argmax(dim=2)
+            target_neigh_idxs = data["target"]["neigh_idxs"]
 
-        target_pred = data["P_normalized"].argmax(dim=1)
-        source_neigh_idxs = data["source"]["neigh_idxs"]
+            target_pred = data["P_normalized"].argmax(dim=1)
+            source_neigh_idxs = data["source"]["neigh_idxs"]
 
-        # uniqueness (number of unique predictions)
-        self.tracks[f"uniqueness_fwd"] = uniqueness(source_pred)
-        self.tracks[f"uniqueness_bac"] = uniqueness(target_pred)
+            # uniqueness (number of unique predictions)
+            self.tracks[f"uniqueness_fwd"] = uniqueness(source_pred)
+            self.tracks[f"uniqueness_bac"] = uniqueness(target_pred)
+
+            # added by Omri:
+        if self.hparams.mode !='train':
+            # original
+            geo_mean_fm , geo_array_fm, geo_90_fm = compute_geo_dist_batch(data["P_normalized"].clone(), data['geo_dist'][:,:,:,1], is_P_mapping=False, dont_mean=False, gt=None)
+            # FM             
+            # p_fm = FM_to_p2p(c_mat, evects1[i], evects2[i])
+            geo_mean_fm , geo_array_fm, geo_90_fm = compute_geo_dist_batch(data["P_normalized"].clone(), data['geo_dist'][:,:,:,1], is_P_mapping=False, dont_mean=False, gt=None)
+
+
+            self.tracks[f"geo_mean"] = geo_mean_fm
+            self.tracks[f"acc"]  = geo_array_fm[0][0]
+            self.tracks[f"acc1%"] = geo_array_fm[0][5]
+            if self.hparams.mode =='test':
+                pair = data['key'][0]
+                self.mean_err_list.append(geo_mean_fm.cpu().item())
+                self.pairs_name.append(pair)
+                self.acc_list.append(geo_array_fm[0][5].cpu().item())
+                mapping = data["P_normalized"].argmax(-1)[0].cpu()
+                self.mapping_list.append(mapping[None,:])
+                if self.geo_dist.device != geo_array_fm.device:
+                    self.geo_dist= self.geo_dist.to(geo_array_fm.device)
+                self.geo_dist += geo_array_fm[0]
+                
+                if True:
+                    self.P_crop.append(data["P_normalized"][0].cpu())
+                    P_target= switch_functions.measure_similarity(self.hparams.similarity_init, data['source']["dense_output_features"], data['source']["dense_output_features"])
+                    P_source = switch_functions.measure_similarity(self.hparams.similarity_init, data['target']["dense_output_features"], data['target']["dense_output_features"])
+                    self.P_target.append(P_target[0].cpu())
+                    self.P_source.append(P_source[0].cpu())

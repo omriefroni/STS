@@ -15,6 +15,10 @@ from torch import Tensor
 
 from utils import argparse_init, switch_functions
 
+#STS
+import plotly.express as px
+import pandas as pd
+import wandb, pickle
 
 class ShapeCorrTemplate(LightningModule):
     """
@@ -37,7 +41,9 @@ class ShapeCorrTemplate(LightningModule):
 
         
     def setup(self, stage):
-        (self.train_dataset, self.val_dataset, self.test_dataset,) = switch_functions.load_dataset(self.hparams)
+        # (self.train_dataset, self.val_dataset, self.test_dataset,) = switch_functions.load_dataset(self.hparams) # Original code
+        (self.train_dataset, self.val_dataset, self.test_dataset,) = switch_functions.load_dataset_spectral(self.hparams)
+
 
     def forward(self, data) -> Tensor:
         """Stub."""
@@ -53,6 +59,7 @@ class ShapeCorrTemplate(LightningModule):
         self.tracks = {}
         self.hparams.batch_idx = batch_idx
         self.hparams.mode = mode
+        batch = self.covnert_batch_from_spectral_to_DPC(batch) # STS
         self.batch = batch
 
         # forward pass
@@ -73,8 +80,9 @@ class ShapeCorrTemplate(LightningModule):
             for k, v in all.items():
                 self.logger.experiment.add_scalar(f"{k}/step", v,self.global_step)
 
-        if self.vis_iter():
-            self.visualize(batch, mode=mode)
+        # STS - disablr original vis ()
+        # if self.vis_iter():
+        #     self.visualize(batch, mode=mode)
 
         output = collections.OrderedDict({"loss": loss})
         return output
@@ -122,7 +130,7 @@ class ShapeCorrTemplate(LightningModule):
         # init data generators
         if self.hparams.task_name == "shape_corr":
             # sampler = RandomSampler(dataset, replacement=False) if mode == 'train' else None # shape corr means dataset = N**2, replacment=False is too slow (but for a small dataset it is ok)
-            sampler = None if self.hparams.dataset_name != 'surreal' else BigRandomSampler(dataset, replacement=True)
+            sampler = None if self.hparams.dataset_name != 'surreal' else BigRandomSampler(dataset, replacement=True)  # Not rellvant to STS code 
             loader = switch_functions.get_dataloader(self.hparams.task_name, self.hparams)(
                 dataset=dataset,
                 batch_size=getattr(self.hparams, f"{mode}_batch_size", 1),
@@ -143,6 +151,11 @@ class ShapeCorrTemplate(LightningModule):
 
         prepare_data is called from a single GPU. Do not use it to assign state (self.x = y).
         """
+    def covnert_batch_from_spectral_to_DPC(self, batch):
+        batch['source'] = {'pos':batch['verts'][:, :, :, 0].float()}
+        batch['target'] = {'pos':batch['verts'][:, :, :, 1].float()}
+        return batch
+
 
     def train_dataloader(self):
         """Stub."""
@@ -185,6 +198,20 @@ class ShapeCorrTemplate(LightningModule):
     def on_test_epoch_start(self):
         self.test_logs = []
         self.hparams.mode = 'test'
+
+        # STS (for manual logging)
+                # added by Omri
+        self.mean_err_list = []
+        self.pairs_name = []
+        self.acc_list = []
+        self.mapping_list = []
+        self.P_crop = []
+        self.P_target = []
+        self.P_source = []
+        self.time_list = []
+        self.geo_range = torch.arange(0, 1, step=0.002)
+        self.geo_dist = torch.zeros(len(self.geo_range))
+        
     
     def on_epoch_end_generic(self):
         logs = getattr(self, f"{self.hparams.mode}_logs", None)
@@ -197,8 +224,8 @@ class ShapeCorrTemplate(LightningModule):
             val = s / len(lst)
             self.tracks[name] = val
 
-            self.logger.experiment.add_scalar(name, val, self.current_epoch)
-
+            # self.logger.experiment.add_scalar(name, val, self.current_epoch)  # Old version command
+            self.log_dict({name: val}) #, on_epoch=False) 
 
         return dict_of_lists
 
@@ -208,7 +235,29 @@ class ShapeCorrTemplate(LightningModule):
     def on_validation_epoch_end(self) -> None:
         self.on_epoch_end_generic()
 
+    def on_test_epoch_end(self):
+        self.on_epoch_end_generic()
 
+        # manual logging
+        count = len(self.mean_err_list)
+        self.geo_dist = self.geo_dist / count
+        self.geo_mean = sum(self.mean_err_list) / count
+        self.acc_mean = sum(self.acc_list) / count
+        self.run_time = sum(self.time_list) / len(self.time_list)
+
+        df = pd.DataFrame({'acc':self.geo_dist.cpu(),'range':self.geo_range})
+        fig = px.line(df, x="range", y="acc")
+
+        dict_to_log = {'geo_array': wandb.Plotly(fig),
+                        # 'test/geo_dist/Test_mean': self.geo_mean.cpu(),
+                        'geo_mean': self.geo_mean,
+                        'acc': self.acc_mean,
+                        'time': self.run_time
+                      }
+        self.log_dict(dict_to_log)
+        dict_to_log['geo_array'] =self.geo_dist.cpu()
+
+        return 
 
     @staticmethod
     def add_model_specific_args(parent_parser, task_name, dataset_name, is_lowest_leaf=False):
