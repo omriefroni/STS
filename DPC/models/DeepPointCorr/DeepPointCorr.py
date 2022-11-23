@@ -220,11 +220,11 @@ class DeepPointCorr(ShapeCorrTemplate):
                     self.get_neighbor_loss(data["target"]["pos"], data["target"]["neigh_idxs"], data["source"]["cross_recon"], self.hparams.k_for_cross_recon)
 
                 self.losses[f"neigh_loss_fwd"] = self.hparams.neigh_loss_lambda * data[f"neigh_loss_fwd_unscaled"]
-                self.losses[f"neigh_loss_bac"] = self.hpa0rams.neigh_loss_lambda * data[f"neigh_loss_bac_unscaled"]
+                self.losses[f"neigh_loss_bac"] = self.hparams.neigh_loss_lambda * data[f"neigh_loss_bac_unscaled"]
 
             #STS
             if  self.hparams.compute_fm_loss and self.hparams.fm_loss_lambda > 0.0:
-                data['fm_loss_unscaled'], data['P_fm']= self.fm_step(data)
+                data['fm_loss_unscaled']= fm_step(data, data['source']["dense_output_features"], data['target']["dense_output_features"])
                 self.losses[f"fm_loss"] = self.hparams.fm_loss_lambda * data[f"fm_loss_unscaled"]
         self.track_metrics(data)
 
@@ -232,7 +232,7 @@ class DeepPointCorr(ShapeCorrTemplate):
 
     def test_step(self, test_batch, batch_idx): # STS - different rom original
         self.hparams.mode = 'test'
-        test_batch = self.covnert_batch_from_omri(test_batch)
+        test_batch = self.covnert_batch_from_spectral_to_DPC(test_batch)
         self.training_step(test_batch, batch_idx, mode='test')
 
 
@@ -267,7 +267,7 @@ class DeepPointCorr(ShapeCorrTemplate):
         parser.add_argument("--use_all_neighs_for_cross_reco", nargs="?", default=False, type=str2bool, const=True, help="whether to use self reconstruction")
         parser.add_argument("--use_all_neighs_for_self_reco", nargs="?", default=False, type=str2bool, const=True, help="whether to use self reconstruction")
 
-        parser.add_argument("--compute_fm_loss", nargs="?", default=False, type=str2bool, help="whether to compute neighbor smoothness loss")
+        parser.add_argument("--compute_fm_loss", nargs="?", default=True, type=str2bool, help="whether to compute neighbor smoothness loss")
         parser.add_argument("--fm_loss_lambda", type=float, default=1, help="weight for neighbor smoothness loss")
         parser.add_argument("--n_points", type=int, default=1024, help="number of data points")
         parser.add_argument("--k_lbo", type=int, default=40, help="How many LBO vectors to create")

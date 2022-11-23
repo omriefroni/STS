@@ -1,6 +1,15 @@
 """Shape correspondence template."""
 from argparse import Namespace
 import collections
+# STS imports
+import os, sys
+print(os.path.abspath('./'))
+sys.path.append(os.path.abspath('./'))
+sys.path.append(os.path.abspath('./DPC/'))
+
+
+
+
 from models.correspondence_utils import square_distance
 from utils.tensor_utils import to_numpy
 from data.point_cloud_db.surreal import BigRandomSampler
@@ -200,7 +209,6 @@ class ShapeCorrTemplate(LightningModule):
         self.hparams.mode = 'test'
 
         # STS (for manual logging)
-                # added by Omri
         self.mean_err_list = []
         self.pairs_name = []
         self.acc_list = []
@@ -243,18 +251,22 @@ class ShapeCorrTemplate(LightningModule):
         self.geo_dist = self.geo_dist / count
         self.geo_mean = sum(self.mean_err_list) / count
         self.acc_mean = sum(self.acc_list) / count
-        self.run_time = sum(self.time_list) / len(self.time_list)
+        if len(self.time_list) > 0:
+            self.run_time = sum(self.time_list) / len(self.time_list)
+        else:
+            self.run_time = 0
 
         df = pd.DataFrame({'acc':self.geo_dist.cpu(),'range':self.geo_range})
         fig = px.line(df, x="range", y="acc")
 
-        dict_to_log = {'geo_array': wandb.Plotly(fig),
+        dict_to_log = {#'geo_array': wandb.Plotly(fig),
                         # 'test/geo_dist/Test_mean': self.geo_mean.cpu(),
                         'geo_mean': self.geo_mean,
                         'acc': self.acc_mean,
                         'time': self.run_time
                       }
         self.log_dict(dict_to_log)
+        print(dict_to_log)
         dict_to_log['geo_array'] =self.geo_dist.cpu()
 
         return 

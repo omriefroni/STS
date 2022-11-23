@@ -28,7 +28,8 @@ FAUST_GEO = 'Spectral_data/datasets/Faust_original/faust_geo.hdf5'
 
 def create_sts_test_dataset(args):
     name =  args.STS_test_dataset
-    if name == 'SHREC':
+    print(name)
+    if name == 'SHREC' or name == 'SURREAL':
         dataset = SHREC(args,'test')
     elif name =='FAUST':
         dataset = FAUST(args,'test')

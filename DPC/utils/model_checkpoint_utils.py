@@ -2,7 +2,7 @@ import os
 import torch
 from pathlib import Path
 # from data.generic_shape_dataset import GenericShapeCorrDataSet
-import torch_geometric.transforms as T
+# import torch_geometric.transforms as T
 from datetime import datetime
 
 def extract_model_path_for_hyperparams(start_path, model, hparams):

@@ -1,5 +1,11 @@
 """For all general switch functions based on flags."""
-from Spectral_data.datasets import SHREC, FAUST, SURREAL, create_sts_test_dataset, create_sts_train_val_dataset  # STS datasets
+
+# STS imports
+import os, sys
+print(os.path.abspath('./'))
+sys.path.append(os.path.abspath('./'))
+
+from Spectral_data.pc_dataset import  create_sts_test_dataset, create_sts_train_val_dataset  # STS datasets
 from data.point_cloud_db.tosca import TOSCA
 from data.point_cloud_db.smal import SMAL
 from data.point_cloud_db.surreal import surreal
@@ -46,9 +52,9 @@ def get_dataloader(task_name, params):
 
 def load_dataset_spectral(hparams): # STS dataset selection
 
-    hparams.STS_test_dataset = hparams.dataset
+    hparams.STS_test_dataset = hparams.dataset_name
     test_dataset = create_sts_test_dataset(hparams)
-    hparams.STS_dataset = hparams.dataset
+    hparams.STS_dataset = hparams.dataset_name
     train_dataset, val_dataset = create_sts_train_val_dataset(hparams, return_dataset=True)
     
     return train_dataset, val_dataset, test_dataset

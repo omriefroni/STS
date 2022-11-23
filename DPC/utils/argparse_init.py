@@ -59,7 +59,7 @@ def init_parse_argparse_default_params(parser, dataset_name=None, arch=None):
     parser.add_argument(
         "--dataset_name",
         type=str,
-        default=DATASET_OPTIONS[task_name][0],
+        default='SHREC', #DATASET_OPTIONS[task_name][0], # STS
         # choices=DATASET_OPTIONS[task_name],
         help="The dataset to evaluate on",
     )
